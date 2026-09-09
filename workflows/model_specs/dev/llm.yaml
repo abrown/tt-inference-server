@@ -387,6 +387,31 @@ templates:
         # closable by tuning: see the pool comment above.]
         max_model_len: "131072"
         max_num_batched_tokens: "131072"
+        # Four data-parallel replicas, each a (1,8) submesh of the (4,8) mesh
+        # (create_submeshes, tt_transformers/tt/generator.py:2954-2958), so
+        # the 24 chips that were replicas at DP=1 serve requests instead.
+        # _infer_data divides max_concurrency by this: vLLM runs with
+        # max_num_seqs 8 per replica, 32 in total, which is the Appendix B.0
+        # concurrency for this system. Targets are per system and are read
+        # straight from the blackhole_galaxy key (get_perf_reference), so
+        # this cannot move the bar.
+        #
+        # Requires the vllm-tt-plugin that folds Gemma4's DP into single-
+        # process lanes (platform.py, _LANE_DP_ARCHS). Without it vLLM runs
+        # standard multi-process DP: each rank narrows TT_VISIBLE_DEVICES to
+        # 8 chips and opens its own mesh, which the fixed 32-chip torus
+        # descriptor above cannot describe. Lane DP keeps one process, one
+        # mesh and that descriptor.
+        #
+        # This is also what makes the graded concurrency runnable at all:
+        # warm-up sweeps batch x sequence length per replica, so it peaks at
+        # 8 x 4096 = 32,768 batched tokens, below the 65,536 at which the
+        # single-replica warm-up hangs (blockers/004). Measured on the 32-chip
+        # BH Galaxy at concurrency 32, ISL 1024/2048/4096, 32 requests each:
+        # 0 errors, TTFT 4.39 s / 7.24 s / 36.9 s, 507 tok/s aggregate decode
+        # (runs/diag/tp8-dp4-lanes). Each replica converts its own copy of
+        # the weights under a P150x8/ cache directory.
+        data_parallel_size: 4
         enable-auto-tool-choice: true
         tool-call-parser: gemma4
         default-chat-template-kwargs: '{"enable_thinking": true}'
