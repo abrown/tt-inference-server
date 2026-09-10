@@ -302,6 +302,37 @@ templates:
         # which gemma4 does not implement. Both tracked separately.
         MESH_DEVICE: "(4,8)"
         GEMMA4_PAGE_BLOCK_SIZE: "64"
+        # Prefill bucket policy. The shared tt_transformers policy pads any
+        # prompt above 1024 tokens to the next power of two. Every graded
+        # input length is a power of two, and the chat template (with
+        # enable_thinking) adds ~16 tokens, so every graded prompt lands just
+        # past one and ran at twice its length: ISL 1024 as a 2048-token
+        # prefill, 4096 as 8192 -- the latter above every trace bucket and
+        # never seen by warm-up, which is the 12 s first-request outlier at
+        # that point. Measured on this system at TP=8, ISL 1024: 364 ms of
+        # engine time for the 2048-token kernel, ~0.17 ms per padded token.
+        #
+        # 256 is the sliding layers' SDPA q-chunk and the finest unit the
+        # ops take (it also covers the 32-tile and 64-block constraints). The
+        # graded prompts then land at 1280 / 2304 / 4352 / 8448 / ... instead
+        # of 2048 / 4096 / 8192 / 16384. Set here, not in the model, because
+        # the bucket set is a property of the prompts a deployment serves.
+        GEMMA4_PREFILL_PAD_GRANULARITY: "256"
+        # The buckets to capture as prefill traces at warm-up: the two short
+        # buckets every path assumes, plus the three the graded sweep's
+        # concurrency-1 points land in under the granularity above and under
+        # this system's 131072 context (ISL 1024 -> 1280, 2048 -> 2304,
+        # 4096 -> 4352). The default list (128, 512, 1024, 2048, 4096) traced
+        # buckets no graded prompt reaches. Every listed bucket is also
+        # warmed at batch 1/2/4/8, so it is compiled before the first request.
+        # Buckets above 4352 (ISL 8192 and up) stay eager: trace above 4k has
+        # shown no gain and the trace region would have to grow with them.
+        GEMMA4_TRACE_PREFILL_SEQ_LENS: "128,1024,1280,2304,4352"
+        # The default cap, 4096, was set on QB2 for DRAM; 4352 is 6% past it
+        # and this system has the room (see trace_region_size). Batch x
+        # length is still capped at 32,768 by the model, so 4352 traces at
+        # batch 1/2/4 and runs eager at 8.
+        GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN: "4352"
         # Hybrid-off all-user KV pool. Every layer allocates a full-length
         # buffer here, and the buffer is replicated to every device
         # (ReplicateTensorToMesh), so the pool is bounded by ONE chip's DRAM
