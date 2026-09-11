@@ -333,6 +333,21 @@ templates:
         # length is still capped at 32,768 by the model, so 4352 traces at
         # batch 1/2/4 and runs eager at 8.
         GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN: "4352"
+        # Keep the "thought" label that opens every thinking channel in
+        # reasoning_content instead of hiding it. With thinking enabled the
+        # model's first tokens are <|channel>, "thought", "\n"; the parser
+        # cannot know a delta beginning "th" is the label until all of
+        # "thought\n" has arrived, so with the label hidden nothing reached
+        # the client until the third generated token -- or the fifth when the
+        # model closes an empty thought, which it does for most synthetic
+        # prompts. aiperf's TTFT is time to the first delta with text, so it
+        # was carrying two to four decode steps of no prefill work. Measured
+        # at TP=8, concurrency 1: TTFT p50 466/619/940 -> 311/461/776 ms at
+        # ISL 1024/2048/4096, ~155 ms at every length; content identical on
+        # 30 of 32 requests, the other two differed in generation not in
+        # parsing (runs/diag/tp8-pad256-label vs tp8-pad256). Clients see
+        # reasoning_content start with "thought\n"; content is unaffected.
+        GEMMA4_REASONING_STRIP_THOUGHT_LABEL: "0"
         # Hybrid-off all-user KV pool. Every layer allocates a full-length
         # buffer here, and the buffer is replicated to every device
         # (ReplicateTensorToMesh), so the pool is bounded by ONE chip's DRAM
